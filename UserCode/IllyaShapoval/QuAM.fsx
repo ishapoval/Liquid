@@ -15,6 +15,26 @@ open System.Text.RegularExpressions
 open System.Collections.Generic
 open System.IO
 
+// Show elapsed times
+type QubitTimer() =
+    let sw  = 
+        let sw  = Diagnostics.Stopwatch()
+        show ""
+        show "%8s %8s %8s %s" "Secs/Op" "S/Qubit" "Mem(GB)" "Operation"
+        show "%8s %8s %8s %s" "-------" "-------" "-------" "---------"
+        sw.Restart()
+        sw
+
+    member x.Show(str:string,?i:int,?reset:bool) =
+        let i           = defaultArg i 1
+        let reset       = defaultArg reset true
+        let ps          = procStats(false)
+        let secs        = float sw.ElapsedMilliseconds / 1000.0
+        let spi         = secs / float i
+        show "%8.3f %8.3f %8.3f %s" secs spi (float ps.privMB / 1024.) str
+        if reset then sw.Restart()
+
+
 module QuAMGates =
 
     /// <summary>
@@ -310,6 +330,7 @@ module QuAMGates =
                 Draw    = sprintf "\\multigate{#%d}{LOAD}" (qs.Length-1),
                 Op      = WrapOp op
                )
+        show "  processing pattern (%i) %s" cur <| Convert.ToString(cur,2)
         (gate p prv cur).Run qs
 
     /// <summary>
@@ -472,7 +493,7 @@ module Script =
             | _ when cnt >= 20 -> ()
             | (idx,v)::info    ->
                 let xs  = idx >>> (n+1)
-                show "0x%02x: %4.1f%% (0x%06x)" xs (v*100.0) idx                    
+                show "0x%02x: %4.2f%% (0x%06x)" xs (v*100.0) idx
                 showItm (cnt+1) info
         showItm 0 info
 
@@ -480,7 +501,10 @@ module Script =
 
     [<LQD>]
     let QuAM() =  // 4bit key, 4 bit val
+        
+        //let qt = QubitTimer()
 
+        // Initialize qubits
         let n           = 8             // Max bits in input patterns
         let pats        = [
             for i in 0..15 ->
@@ -490,31 +514,54 @@ module Script =
                     
         let ket     = Ket(2*n+1)
         let qs      = ket.Qubits
-        let circ    = Circuit.Compile (init n pats) qs
 
-        circ.Render("QuAM1.htm")
+        show "*************************************************"
+        show "*             LOADING PATTERNS                  *"
+        show "*************************************************"
+
+        show "Compiling load-circuit for %i patterns.." pats.Length
+        let circ    = Circuit.Compile (init n pats) qs
+        //circ.RenderHT "QuAM.Load.Circuit"
         //circ.Dump()
+        //qt.Show "           <------- Load-circuit compiled"
+
         ket.TraceRun   <- 0   // 0 = None, 1 = Log, 2 = Console, 2 = States
+        show "Running load-circuit.."
         circ.Run qs
+
+        //qt.Show "           <------- Patterns loaded"
+
         dumpProb n ket "Loaded patterns"
 
-        let xs          = !!(qs,[0..n-1])
 
+        show ""
+        show "*************************************************"
+        show "*             SEARCHING PATTERNS                *"
+        show "*************************************************"        
+
+        let xs          = !!(qs,[0..n-1])
         let key         = 6
         let poss        = [for i in 0..15 -> key <<< 4 ||| i]
+        for p in poss do
+            show "  incomming pattern (%i) %s" p <| Convert.ToString(p,2)
 
         // Gather statistics for a forced number of steps
         GroverStats    <- Array.create 17 (0,0.0) |> Some
-
+        show "Compiling search-circuit.."
         let circ        = Circuit.Compile (Grover pats poss) xs
         //circ.Dump()
-        circ.Fold().Render("QuAM2.htm")
+        //circ.Fold().RenderHT "QuAM.Search.Circuit"
+
         ket.TraceRun   <- 0
+        show "Running search-circuit.."
         circ.Run xs
+
         let gs          = GroverStats.Value
         for iter in 0..gs.Length-1 do
             let idx,v   = gs.[iter]
             let xs      = idx >>> (n+1)
-            show "    Grover[%2d]: 0x%02x: %4.1f%% (0x%06x)" iter xs (v*100.0) idx                    
+            show "    Grover[%2d]: 0x%02x: %4.2f%% (0x%06x)" iter xs (v*100.0) idx                    
         show ""
         sprintf "Searched for key: %x" key |> dumpProb n ket
+
+        //qt.Show "           <------- Patterns searched"
